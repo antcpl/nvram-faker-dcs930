@@ -5,12 +5,6 @@
 #include <fcntl.h>
 #include <sys/file.h>
 
-// Authors : completely inspired from the zcutlip and decidedlygray very good project which can be found here : https://github.com/zcutlip/nvram-faker
-
-// Modified to fit the needs of our project by me and colleagues : Antoine CHAPEL, Enzo MAZZOLENI, Loup LOBET 
-
-// Fitted to match exactly the DCS-93X D-Link nvram (tested and working from DCS-932 to DCS-934)
-
 #include "nvram-faker.h"
 //include before ini.h to override ini.h defaults
 #include "nvram-faker-internal.h"
@@ -26,7 +20,6 @@ static int kv_count=0;
 static int key_value_pair_len=DEFAULT_KV_PAIR_LEN;
 static char **key_value_pairs=NULL;
 
-//called at each line by ini_parse_file in the ini project
 static int ini_handler(void *user, const char *section, const char *name,const char *value)
 {
 
@@ -43,15 +36,18 @@ static int ini_handler(void *user, const char *section, const char *name,const c
     kv = *((char ***)user);
     if(NULL == kv)
     {
-        LOG_PRINTF("kv is NULL\n");
+        DEBUG_PRINTF("kv is NULL\n");
         return 0;
     }
     
-    // this condition is to manage two things : increase the array size when needed and manage the multi-line values in nvram 
-    if(kv_count>=2){ 
-        if(strcmp(kv[kv_count-2],name)==0){ 
+    // tricky way of working, for multiline values, ini_parse_file call ini handler one time per line with the same key each time. 
+    // from the index 2 we have to check if the precedent key has the same value as the one we are working on this iteration
+    if(kv_count>=2){
+        // if the current key equals to the precedent key, then we have to treat the multi line
+        if(strcmp(kv[kv_count-2],name)==0){
+            // if the precedent value didn't has \n then we have to allocate 3 bytes more to add this \n
             if(kv[kv_count-1][strlen(kv[kv_count-1])-1]!='\n'){
-                int new_size = strlen(kv[kv_count-1])+strlen(value)+3;
+                int new_size = strlen(kv[kv_count-1])+strlen(value)+3; 
                 char * old_value = kv[kv_count-1];
                 kv[kv_count-1] = malloc(new_size);
                 char * first_line ="\n\0";
@@ -61,18 +57,21 @@ static int ini_handler(void *user, const char *section, const char *name,const c
                 char * return_line = "\n\0";
                 strcat(kv[kv_count-1],return_line);
                 free(old_value);
-            }else
+            }
+            //if the precedent value already has a \n then only need to allocate 2 bytes more for the \n\0
+            else
             {
-            int new_size = strlen(kv[kv_count-1])+strlen(value)+2; 
-            char * old_value = kv[kv_count-1];
-            kv[kv_count-1] = malloc(new_size);
-            strcpy(kv[kv_count-1],old_value);
-            strcat(kv[kv_count-1],value);
-            char * return_line = "\n\0";
-            strcat(kv[kv_count-1],return_line);
-            free(old_value);
+                int new_size = strlen(kv[kv_count-1])+strlen(value)+2;
+                char * old_value = kv[kv_count-1];
+                kv[kv_count-1] = malloc(new_size);
+                strcpy(kv[kv_count-1],old_value);
+                strcat(kv[kv_count-1],value);
+                char * return_line = "\n\0";
+                strcat(kv[kv_count-1],return_line);
+                free(old_value);
             }
         }
+        // if the array isn't big enough, we allocate more space 
         else if(kv_count >= key_value_pair_len)
         {
             old_kv_len=key_value_pair_len;
@@ -80,7 +79,7 @@ static int ini_handler(void *user, const char *section, const char *name,const c
             new_kv=(char **)malloc(key_value_pair_len * sizeof(char **));
             if(NULL == new_kv)
             {
-                LOG_PRINTF("Failed to reallocate key value array.\n");
+                DEBUG_PRINTF("Failed to reallocate key value array.\n");
                 return 0;
             }
             for(i=0;i<old_kv_len;i++)
@@ -93,6 +92,7 @@ static int ini_handler(void *user, const char *section, const char *name,const c
             kv[kv_count++]=strdup(name);
             kv[kv_count++]=strdup(value);
         }
+        //otherwise just a new value to add to the array 
         else{
             kv[kv_count++]=strdup(name);
             kv[kv_count++]=strdup(value);
@@ -102,7 +102,7 @@ static int ini_handler(void *user, const char *section, const char *name,const c
         kv[kv_count++]=strdup(name);
         kv[kv_count++]=strdup(value);
     }
- 
+   
     return 1;
 }
 
@@ -116,15 +116,15 @@ void initialize_ini(void)
     }
     if(NULL == key_value_pairs)
     {
-        LOG_PRINTF("Failed to allocate memory for key value array. Terminating.\n");
+        DEBUG_PRINTF("Failed to allocate memory for key value array. Terminating.\n");
         exit(1);
     }
     
     ret = ini_parse(INI_FILE_PATH,ini_handler,(void *)&key_value_pairs);
     if (0 != ret)
     {
-        LOG_PRINTF("ret from ini_parse was: %d\n",ret);
-        LOG_PRINTF("INI parse failed. Terminating\n");
+        DEBUG_PRINTF("ret from ini_parse was: %d\n",ret);
+        DEBUG_PRINTF("INI parse failed. Terminating\n");
         free(key_value_pairs);
         key_value_pairs=NULL;
         exit(1);
@@ -144,14 +144,14 @@ char *nvram_bufget(int useless, char *key)
     char *value;
     char *ret;
 
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : nvram_bufget called with key : %s\n"RED_OFF, key);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : nvram_bufget called with key : %s\n"RED_OFF, key);
 
     pid_t ppid = getppid();
     if(ppid!=-1){
-        LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : nvram_bufget called by process : %d\n"RED_OFF, ppid);
+        DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : nvram_bufget called by process : %d\n"RED_OFF, ppid);
     }
     
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : Opening the file %s\n"RED_OFF, INI_FILE_PATH);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : Opening the file %s\n"RED_OFF, INI_FILE_PATH);
 
     int fd = open(INI_FILE_PATH, O_RDONLY);
     if (fd == -1) {
@@ -159,7 +159,7 @@ char *nvram_bufget(int useless, char *key)
         return NULL;
     }
 
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : Locking the file %s\n"RED_OFF, INI_FILE_PATH);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : Locking the file %s\n"RED_OFF, INI_FILE_PATH);
 
     if (flock(fd, LOCK_EX) == -1) {
         perror("Fail to lock the file");
@@ -172,13 +172,13 @@ char *nvram_bufget(int useless, char *key)
     //     printf("I locked the file\n");
     // }
 
-    LOG_PRINTF(RED_ON"[+] NVRAM_DEBUG : initializing the memory map and the key research\n"RED_OFF);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM_DEBUG : initializing the memory map and the key research\n"RED_OFF);
     //call to initialize ini to get the latest file version
     initialize_ini();
+
     //from now on the key value pair array is in our memory 
 
-
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : Unlocking the file %s\n"RED_OFF, INI_FILE_PATH);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : Unlocking the file %s\n"RED_OFF, INI_FILE_PATH);
     if (flock(fd, LOCK_UN) == -1) {
         perror("Fail to unlock the file");
         close(fd);
@@ -187,14 +187,14 @@ char *nvram_bufget(int useless, char *key)
 
     close(fd);
 
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : Iterating over the structure to look for the key \n"RED_OFF);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : Iterating over the structure to look for the key \n"RED_OFF);
 
     //we can now make a get and try to find the key we want
     for(i=0;i<kv_count;i+=2)
     {
         if(strcmp(key,key_value_pairs[i]) == 0)
         {
-            LOG_PRINTF("%s=%s\n",key,key_value_pairs[i+1]);
+            DEBUG_PRINTF("%s=%s\n",key,key_value_pairs[i+1]);
             found = 1;
             value=key_value_pairs[i+1];
             break;
@@ -204,13 +204,13 @@ char *nvram_bufget(int useless, char *key)
     ret = NULL;
     if(!found)
     {
-            LOG_PRINTF( RED_ON"%s=Unknown\n"RED_OFF,key);
+            DEBUG_PRINTF( RED_ON"%s=Unknown\n"RED_OFF,key);
     }else
     {
             ret=strdup(value);
     }
 
-
+    // freeing the space of the array 
     for(i=0;i<(DEFAULT_KV_PAIR_LEN/2)-1;i++){
         free(key_value_pairs[i]);
         free(key_value_pairs[i+1]);
@@ -234,7 +234,7 @@ void nvram_bufset(int useless,char *key,char *value)
 
     pid_t ppid = getppid();
     if(ppid!=-1){
-        LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : nvram_bufset called by process : %d\n"RED_OFF, ppid);
+        DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : nvram_bufset called by process : %d\n"RED_OFF, ppid);
     }
     
     //locking the file
@@ -243,35 +243,37 @@ void nvram_bufset(int useless,char *key,char *value)
         printf("Fail open the file to lock it at location : %s\n", INI_FILE_PATH);
         return;
     }
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : Opening the file %s\n"RED_OFF, INI_FILE_PATH);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : Opening the file %s\n"RED_OFF, INI_FILE_PATH);
 
     if (flock(fd, LOCK_EX) == -1) {
         perror("Fail to lock the file");
         close(fd);
         return;
     }
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : Locking the file %s\n"RED_OFF, INI_FILE_PATH);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : Locking the file %s\n"RED_OFF, INI_FILE_PATH);
 
-    LOG_PRINTF(RED_ON"[+] NVRAM_DEBUG : initializing the memory map and the key research\n"RED_OFF);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM_DEBUG : initializing the memory map and the key research\n"RED_OFF);
     //call to initialize ini to get the latest file version
     initialize_ini();
     //from now on the key value pair array is in our memory 
 
-    LOG_PRINTF(RED_ON"[+] NVRAM_DEBUG : iterating over the structure to find if the key is already present\n"RED_OFF);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM_DEBUG : iterating over the structure to find if the key is already present\n"RED_OFF);
     //we can now make a get and try to find the key we want
     for(i=0;i<kv_count;i+=2)
     {
         if(strcmp(key,key_value_pairs[i]) == 0)
         {
-            LOG_PRINTF(GREEN_ON"%s=%s\n"GREEN_OFF,key,key_value_pairs[i+1]);
+            DEBUG_PRINTF(GREEN_ON"%s=%s\n"GREEN_OFF,key,key_value_pairs[i+1]);
             found = 1;
             break;
         }
     }
 
+    // if the key has not been found then we have to add the value 
     if(!found)
     {
-        LOG_PRINTF(RED_ON"[+] NVRAM_DEBUG : The key has not been found\n"RED_OFF);
+        DEBUG_PRINTF(RED_ON"[+] NVRAM_DEBUG : The key has not been found\n"RED_OFF);
+        // check to see if we have enough space
         if(kv_count >= key_value_pair_len)
         {
             old_kv_len=key_value_pair_len;
@@ -279,7 +281,7 @@ void nvram_bufset(int useless,char *key,char *value)
             new_kv=(char **)malloc(key_value_pair_len * sizeof(char **));
             if(NULL == new_kv)
             {
-                LOG_PRINTF("Failed to reallocate key value array.\n");
+                DEBUG_PRINTF("Failed to reallocate key value array.\n");
                 return;
             }
             for(i=0;i<old_kv_len;i++)
@@ -295,35 +297,39 @@ void nvram_bufset(int useless,char *key,char *value)
     }
     else
     {
-        LOG_PRINTF(RED_ON"[+] NVRAM_DEBUG : The key has been found\n"RED_OFF);
+        DEBUG_PRINTF(RED_ON"[+] NVRAM_DEBUG : The key has been found\n"RED_OFF);
         //this is the easy way, OK for non multiline values
         char * old_ptr=key_value_pairs[i+1];
         key_value_pairs[i+1]=strdup(value);
         free(old_ptr);
     
         
-        LOG_PRINTF(RED_ON"[+] NVRAM_DEBUG : We replaced the old value by the new one\n"RED_OFF);
+        DEBUG_PRINTF(RED_ON"[+] NVRAM_DEBUG : We replaced the old value by the new one\n"RED_OFF);
     }
 
+
+    // We just modified the array in the memory of the process, now we have to do the same in the file 
     FILE* file;
 
-    LOG_PRINTF(RED_ON"[+] NVRAM_DEBUG : Opening the file again to get another type of file descriptor\n"RED_OFF);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM_DEBUG : Opening the file again to get another type of file descriptor\n"RED_OFF);
 
     file = fopen(INI_FILE_PATH, "w");
     if (!file)
         return ;
     
+    // here we need a special format for the multiline values
     for(i=0; i<kv_count; i+=2){
+        // get the first occurency of the \n
         char * ptr1=strchr(key_value_pairs[i+1], '\n');
+        // get the last occurency of the \n
         char * ptr2=strrchr(key_value_pairs[i+1], '\n');
-        // LOG_PRINTF(GREEN_ON"[+] NVRAM DEBUG : %p \n"GREEN_OFF, ptr1);
-        // LOG_PRINTF(GREEN_ON"[+] NVRAM DEBUG : %p \n"GREEN_OFF, ptr2);
 
-        if(ptr1!=NULL && ptr2!= NULL && ptr1!=ptr2){
-            // LOG_PRINTF(GREEN_ON"[+] NVRAM DEBUG : I am the holy condition \n"GREEN_OFF);
+        // if both are different, then we have a multi line value
+        if(ptr1!=NULL && ptr2!= NULL && ptr1!=ptr2  ){
         //this is the hard path, we have a multi line value
-        //we must add a space at the begining of each line for the parser to work 
+        //we must add a space at the begining of each line for the parser to work on the next parsing
             char *line = strtok(key_value_pairs[i+1], "\n");
+            //spare the multi line values into one line pieces, add a space at the beginning and repeat until the end
             fprintf(file, "%s:%s\n",key_value_pairs[i],line);
             while(line!=NULL){
                 line = strtok(NULL, "\n");
@@ -338,7 +344,7 @@ void nvram_bufset(int useless,char *key,char *value)
     }
 
     fclose(file);
-    LOG_PRINTF(RED_ON"[+] NVRAM_DEBUG : %s file modified\n"RED_OFF,INI_FILE_PATH);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM_DEBUG : %s file modified\n"RED_OFF,INI_FILE_PATH);
 
 
     //unlocking the file 
@@ -348,22 +354,21 @@ void nvram_bufset(int useless,char *key,char *value)
         return;
     }
     close(fd);
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : Unlocking the file %s\n"RED_OFF, INI_FILE_PATH);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : Unlocking the file %s\n"RED_OFF, INI_FILE_PATH);
 
 
     for(i=0;i<(DEFAULT_KV_PAIR_LEN/2)-1;i++){
-        //LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : Here is the freeing counter %d\n"RED_OFF,i);
         free(key_value_pairs[i]);
         free(key_value_pairs[i+1]);
         key_value_pairs[i]=NULL;
         key_value_pairs[i+1]=NULL;
     }
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : we are out of the loop\n"RED_OFF);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : we are out of the loop\n"RED_OFF);
     free(key_value_pairs);
     key_value_pairs=NULL;
     kv_count=0;
 
-    LOG_PRINTF(RED_ON"[+] NVRAM DEBUG : Every data has been freed\n"RED_OFF);
+    DEBUG_PRINTF(RED_ON"[+] NVRAM DEBUG : Every data has been freed\n"RED_OFF);
 
     return; 
 }
